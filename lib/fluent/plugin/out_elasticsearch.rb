@@ -41,6 +41,9 @@ class Fluent::ElasticsearchOutput < Fluent::BufferedOutput
   config_param :client_cert, :string, :default => nil
   config_param :client_key_pass, :string, :default => nil
   config_param :ca_file, :string, :default => nil
+  config_param :format, :string, :default => nil
+  config_param :key_name, :string, :default => nil
+  config_param :keep_keys, :string, :default => nil
 
   include Fluent::SetTagKeyMixin
   config_set_default :include_tag_key, false
@@ -53,6 +56,10 @@ class Fluent::ElasticsearchOutput < Fluent::BufferedOutput
   def configure(conf)
     super
     @time_parser = TimeParser.new(@time_key_format, @router)
+
+    if @keep_keys
+      @keep_keys = @keep_keys.split(',')
+    end
   end
 
   def start
@@ -161,7 +168,29 @@ class Fluent::ElasticsearchOutput < Fluent::BufferedOutput
   end
 
   def format(tag, time, record)
-    [tag, time, record].to_msgpack
+    record = parse_ltsv(record[@key_name]) if @format == 'ltsv' && @key_name
+    [tag, time, select_record(record)].to_msgpack
+  end
+
+  def parse_ltsv(text)
+    delimiter = "\t"
+    label_delimiter = ':'
+    keys  = []
+    values = []
+
+    text.split(delimiter).each do |pair|
+      key, value = pair.split(label_delimiter, 2)
+      keys.push(key)
+      values.push(value)
+    end
+
+    return Hash[keys.zip(values)]
+  end
+
+  def select_record(record)
+    return record unless @keep_keys
+
+    record.select {|k, v| @keep_keys.include?(k) }
   end
 
   def shutdown
@@ -179,7 +208,7 @@ class Fluent::ElasticsearchOutput < Fluent::BufferedOutput
       if meta.has_key?("_id")
         msgs << { "create" => meta }
         msgs << record
-      end        
+      end
     when "index"
       msgs << { "index" => meta }
       msgs << record
